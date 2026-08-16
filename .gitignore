@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.DS_Store
+*.wav
+*.npz
+*.npy
+output/
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore

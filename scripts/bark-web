@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# bark-web - start the local Bark TTS web app.
+#
+#   bark-web              -> http://127.0.0.1:8080   (this machine only)
+#   bark-web 9000         -> different port
+#   bark-web 8080 --lan   -> also reachable from other devices on your network
+#
+# Binds to loopback by default so nothing is exposed off-machine.
+
+set -euo pipefail
+
+PORT="${1:-8080}"
+HOST="127.0.0.1"
+[[ "${2:-}" == "--lan" ]] && HOST="0.0.0.0"
+
+PY="${BARK_PYTHON:-python3}"
+command -v "$PY" >/dev/null || { echo "bark-web: '$PY' not found (set BARK_PYTHON)" >&2; exit 1; }
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../barktts" && pwd)"
+
+if [[ "$HOST" == "0.0.0.0" ]]; then
+  IP="$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo '?')"
+  echo "bark-web: LAN mode - reachable at http://${IP}:${PORT}"
+  echo "bark-web: anyone on your network can queue jobs on this machine."
+else
+  echo "bark-web: http://127.0.0.1:${PORT}"
+fi
+
+cd "$APP_DIR"
+exec "$PY" -m uvicorn server:app --host "$HOST" --port "$PORT" --log-level warning
