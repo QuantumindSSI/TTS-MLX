@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bark TTS — local</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e9ef;
+    --muted:#8b93a7; --accent:#6ea8fe; --ok:#4ade80; --err:#f87171;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:15px/1.55 ui-sans-serif,-apple-system,"SF Pro Text",Segoe UI,sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:32px 20px 64px}
+  h1{font-size:20px;margin:0 0 2px;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .panel{background:var(--panel);border:1px solid var(--line);
+         border-radius:12px;padding:18px;margin-bottom:16px}
+  label{display:block;font-size:12px;text-transform:uppercase;
+        letter-spacing:.06em;color:var(--muted);margin-bottom:7px}
+  textarea{width:100%;min-height:190px;resize:vertical;background:#0d1017;
+    color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:12px;
+    font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+  textarea:focus,select:focus,input:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-top:14px}
+  .row > div{flex:1;min-width:150px}
+  select,input[type=number]{width:100%;background:#0d1017;color:var(--fg);
+    border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:14px}
+  button{background:var(--accent);color:#08101f;border:0;border-radius:8px;
+    padding:11px 22px;font-size:14px;font-weight:650;cursor:pointer}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .meta{display:flex;gap:18px;flex-wrap:wrap;color:var(--muted);
+        font-size:12px;margin-top:10px}
+  .bar{height:6px;background:#0d1017;border-radius:99px;overflow:hidden;margin:14px 0 8px}
+  .bar>i{display:block;height:100%;width:0;background:var(--accent);
+         transition:width .35s ease}
+  .status{font-size:13px;color:var(--muted)}
+  .status.err{color:var(--err)} .status.ok{color:var(--ok)}
+  audio{width:100%;margin-top:14px}
+  .hide{display:none}
+  a.dl{color:var(--accent);font-size:13px;text-decoration:none}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:99px;
+       background:var(--muted);margin-right:6px;vertical-align:middle}
+  .dot.ok{background:var(--ok)} .dot.err{background:var(--err)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Bark TTS</h1>
+  <div class="sub"><span id="dot" class="dot"></span><span id="health">starting…</span></div>
+
+  <div class="panel">
+    <label for="text">Script</label>
+    <textarea id="text" placeholder="Paste your script here. Long text is split on sentence boundaries and stitched back together."></textarea>
+    <div class="row">
+      <div>
+        <label for="voice">Voice</label>
+        <select id="voice"></select>
+      </div>
+      <div style="max-width:190px">
+        <label for="model">Model</label>
+        <select id="model"></select>
+      </div>
+      <div style="max-width:130px">
+        <label for="temp">Temperature</label>
+        <input id="temp" type="number" min="0.1" max="1.5" step="0.05" value="0.7">
+      </div>
+      <div style="flex:0 0 auto">
+        <button id="go">Generate</button>
+      </div>
+    </div>
+    <div class="meta">
+      <span id="chars">0 characters</span>
+      <span id="est">—</span>
+    </div>
+  </div>
+
+  <div class="panel hide" id="result">
+    <div class="bar"><i id="fill"></i></div>
+    <div class="status" id="status"></div>
+    <audio id="audio" controls class="hide"></audio>
+    <div style="margin-top:10px"><a id="dl" class="dl hide" download>Download .wav</a></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let poll = null;
+
+function estimate(){
+  const n = $('#text').value.trim().length;
+  $('#chars').textContent = n.toLocaleString() + ' characters';
+  if(!n){ $('#est').textContent = '—'; return; }
+  const chunks = Math.max(1, Math.ceil(n/200));
+  const rate = ($('#model').value === 'big') ? 20 : 9;   // x realtime
+  const secs = chunks * 11 * rate;                       // ~11s audio per chunk
+  const m = Math.floor(secs/60), s = secs%60;
+  $('#est').textContent = `~${chunks} chunk${chunks>1?'s':''} · est. ${m?m+'m ':''}${s}s`;
+}
+$('#text').addEventListener('input', estimate);
+
+async function health(){
+  try{
+    const h = await (await fetch('/api/health')).json();
+    const sel = $('#voice');
+    if(!sel.options.length){
+      sel.innerHTML = '<option value="">model default</option>' +
+        h.voices.map(v=>`<option value="${v}">${v}</option>`).join('');
+      if(h.voices.includes('en_speaker_6')) sel.value='en_speaker_6';
+    }
+    const ms = $('#model');
+    if(!ms.options.length && h.models){
+      const label = {small:'bark-small · faster', big:'bark · best quality'};
+      ms.innerHTML = Object.entries(h.models).map(([k,v])=>
+        `<option value="${k}" ${v.available?'':'disabled'}>`+
+        `${label[k]||k}${v.available?'':' (not downloaded)'}</option>`).join('');
+      ms.value = h.models.big && h.models.big.available ? 'big' : 'small';
+      ms.addEventListener('change', estimate);
+      estimate();
+    }
+    if(h.error){
+      $('#dot').className='dot err';
+      $('#health').textContent = 'engine error: ' + h.error;
+    }else if(h.ready){
+      $('#dot').className='dot ok';
+      $('#health').textContent =
+        `ready · ${h.voices.length} voices · ${h.sample_rate/1000}kHz · ` +
+        (h.offline ? 'offline' : 'NETWORK ENABLED');
+      $('#go').disabled = false;
+    }else{
+      $('#health').textContent = 'loading model…';
+      $('#go').disabled = true;
+      setTimeout(health, 1200);
+    }
+  }catch(e){
+    $('#dot').className='dot err';
+    $('#health').textContent = 'server unreachable';
+  }
+}
+
+$('#go').onclick = async () => {
+  const text = $('#text').value.trim();
+  if(!text) return;
+  $('#go').disabled = true;
+  $('#result').classList.remove('hide');
+  $('#audio').classList.add('hide');
+  $('#dl').classList.add('hide');
+  $('#status').className = 'status';
+  $('#status').textContent = 'queued…';
+  $('#fill').style.width = '0%';
+
+  let job;
+  try{
+    const r = await fetch('/api/speak', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        text,
+        voice: $('#voice').value || null,
+        temperature: parseFloat($('#temp').value),
+        model: $('#model').value || 'small'
+      })
+    });
+    if(!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    job = await r.json();
+  }catch(e){
+    $('#status').className='status err';
+    $('#status').textContent = 'failed: ' + e.message;
+    $('#go').disabled = false;
+    return;
+  }
+
+  clearInterval(poll);
+  poll = setInterval(async () => {
+    const s = await (await fetch('/api/jobs/'+job.id)).json();
+    $('#fill').style.width = s.progress + '%';
+
+    if(s.status === 'running' || s.status === 'queued'){
+      $('#status').textContent =
+        `${s.status} — chunk ${s.done_chunks}/${s.total_chunks} · ${s.elapsed}s elapsed`;
+    }else if(s.status === 'done'){
+      clearInterval(poll);
+      $('#fill').style.width = '100%';
+      $('#status').className = 'status ok';
+      const x = s.elapsed / Math.max(s.duration, .001);
+      $('#status').textContent =
+        `done — ${s.duration}s of audio in ${s.elapsed}s `+
+        `(${x.toFixed(1)}x realtime, ${s.model||''})`;
+      const url = `/api/jobs/${job.id}/audio`;
+      const a = $('#audio'); a.src = url; a.classList.remove('hide');
+      const d = $('#dl'); d.href = url; d.download = `bark_${job.id}.wav`;
+      d.classList.remove('hide');
+      $('#go').disabled = false;
+    }else{
+      clearInterval(poll);
+      $('#status').className = 'status err';
+      $('#status').textContent = 'error: ' + (s.error || 'unknown');
+      $('#go').disabled = false;
+    }
+  }, 1000);
+};
+
+health(); estimate();
+</script>
+</body>
+</html>
